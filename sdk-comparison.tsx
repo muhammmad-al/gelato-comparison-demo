@@ -1,65 +1,78 @@
+"use client"
+import { useState } from "react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { toast } from "@/components/ui/use-toast"
+import { createKernelAccount, createKernelAccountClient, getUserOperationGasPrice } from "@zerodev/sdk"
+import { createPublicClient, http, formatEther, formatUnits } from "viem"
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
+import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator"
+import { baseSepolia } from "viem/chains"
+import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants"
 
 export default function Component() {
-  const sdks = [
+  const [sdks, setSdks] = useState([
     {
       name: "Gelato SmartWallet SDK",
       icon: "/gelato-logo.svg",
       iconBg: "bg-red-500",
       isLogo: true,
-      latency: "2.21",
+      latency: "-",
       latencyBadge: null,
-      l1Gas: "3962",
+      l1Gas: "-",
       l1GasBadge: null,
-      l2Gas: "75976",
+      l2Gas: "-",
       l2GasBadge: null,
-      chains: "4",
-      eip7702: "Yes",
+      chains: "-",
+      eip7702: "-",
     },
     {
       name: "Alchemy",
-      icon: "/alchemy-logo.png", // Changed from emoji to actual logo
+      icon: "/alchemy-logo.png",
       iconBg: "bg-blue-500",
-      isLogo: true, // Add flag to indicate this is a logo
-      latency: "2.92",
-      latencyBadge: "+32% Slower",
-      l1Gas: "6420",
-      l1GasBadge: "+62% Gas",
-      l2Gas: "689468",
-      l2GasBadge: "+808% Gas",
-      chains: "4",
-      eip7702: "No",
+      isLogo: true,
+      latency: "-",
+      latencyBadge: null,
+      l1Gas: "-",
+      l1GasBadge: null,
+      l2Gas: "-",
+      l2GasBadge: null,
+      chains: "-",
+      eip7702: "-",
     },
     {
       name: "ZeroDev UltraRelay",
       icon: "/zerodev-logo.svg",
       iconBg: "bg-blue-400",
       isLogo: true,
-      latency: "2.66",
-      latencyBadge: "+20% Slower",
-      l1Gas: "5951",
-      l1GasBadge: "+50% Gas",
-      l2Gas: "230731",
-      l2GasBadge: "+204% Gas",
-      chains: "2",
-      eip7702: "No",
+      latency: "-",
+      latencyBadge: null,
+      l1Gas: "-",
+      l1GasBadge: null,
+      l2Gas: "-",
+      l2GasBadge: null,
+      chains: "-",
+      eip7702: "-",
     },
     {
       name: "Pimlico",
       icon: "/pimlico-logo.svg",
       iconBg: "bg-white",
       isLogo: true,
-      latency: "2.95",
-      latencyBadge: "+33% Slower",
-      l1Gas: "8343",
-      l1GasBadge: "+111% Gas",
-      l2Gas: "355322",
-      l2GasBadge: "+368% Gas",
-      chains: "1",
-      eip7702: "No",
+      latency: "-",
+      latencyBadge: null,
+      l1Gas: "-",
+      l1GasBadge: null,
+      l2Gas: "-",
+      l2GasBadge: null,
+      chains: "-",
+      eip7702: "-",
     },
-  ]
+  ])
+  const [isLoading, setIsLoading] = useState(false)
+  const [account, setAccount] = useState<any>(null)
+  const [publicClient, setPublicClient] = useState<any>(null)
 
   const metrics = [
     { label: "Latency (s)", key: "latency", badgeKey: "latencyBadge" },
@@ -69,8 +82,123 @@ export default function Component() {
     { label: "Purpose-built for EIP-7702", key: "eip7702", badgeKey: null },
   ]
 
+  // Helper function to format wei to ETH
+  const formatWeiToEth = (wei: bigint): string => {
+    return formatEther(wei)
+  }
+  // Helper function to format wei to Gwei
+  const formatWeiToGwei = (wei: bigint): string => {
+    return formatUnits(wei, 9)
+  }
+
+  const runUltraRelaySponsoredTransaction = async () => {
+    setIsLoading(true)
+    try {
+      // 1. Create account if not already
+      let kernelAccount = account
+      let client = publicClient
+      if (!kernelAccount) {
+        const clientInstance = createPublicClient({
+          transport: http(),
+          chain: baseSepolia,
+        })
+        setPublicClient(clientInstance as any)
+        const PRIVATE_KEY = generatePrivateKey()
+        const signer = privateKeyToAccount(PRIVATE_KEY)
+        const entryPoint = getEntryPoint("0.7")
+        const kernelVersion = KERNEL_V3_1
+        const ecdsaValidator = await signerToEcdsaValidator(clientInstance, {
+          signer,
+          entryPoint,
+          kernelVersion,
+        })
+        kernelAccount = await createKernelAccount(clientInstance, {
+          plugins: {
+            sudo: ecdsaValidator,
+          },
+          entryPoint,
+          kernelVersion,
+        })
+        setAccount(kernelAccount)
+        client = clientInstance
+      }
+      // 2. Send sponsored transaction
+      const startTime = Date.now()
+      const kernelClient = createKernelAccountClient({
+        account: kernelAccount,
+        chain: baseSepolia,
+        bundlerTransport: http(process.env.NEXT_PUBLIC_ULTRA_RELAY_URL || ""),
+        userOperation: {
+          estimateFeesPerGas: async ({ bundlerClient }) => {
+            return getUserOperationGasPrice(bundlerClient)
+          },
+        },
+      })
+      const callData = await kernelClient.account.encodeCalls([
+        {
+          to: "0x0000000000000000000000000000000000000000",
+          value: BigInt(0),
+          data: "0x",
+        },
+      ])
+      const userOpHash = await kernelClient.sendUserOperation({
+        callData,
+        maxFeePerGas: BigInt(0),
+        maxPriorityFeePerGas: BigInt(0),
+      })
+      const receipt = await kernelClient.waitForUserOperationReceipt({
+        hash: userOpHash,
+      })
+      const txHash = receipt.receipt.transactionHash
+      const txDetails = await client.getTransaction({
+        hash: txHash,
+      })
+      const txReceipt = await client.getTransactionReceipt({
+        hash: txHash,
+      })
+      const block = await client.getBlock({
+        blockNumber: txReceipt.blockNumber,
+      })
+      const latencyMs = Number(block.timestamp) * 1000 - startTime
+      const latencySec = latencyMs / 1000
+      const gasPrice = txDetails.gasPrice || BigInt(0)
+      const L2Gas = txReceipt.gasUsed
+      const l1GasUsed = (txReceipt as any).l1GasUsed || BigInt(0)
+      const l1Fee = (txReceipt as any).l1Fee || BigInt(0)
+      const totalTxFee = l1Fee + L2Gas * gasPrice
+      // 3. Update the UltraRelay card
+      setSdks(prev => prev.map(sdk =>
+        sdk.name === "ZeroDev UltraRelay"
+          ? {
+              ...sdk,
+              latency: `${latencySec.toFixed(2)}`,
+              l1Gas: l1GasUsed.toString(),
+              l2Gas: L2Gas.toString(),
+              gasPrice: `${formatWeiToGwei(gasPrice)} Gwei`,
+              l1GasBadge: null,
+              l2GasBadge: null,
+              latencyBadge: null,
+            }
+          : sdk
+      ))
+      toast({
+        title: "Transaction Sent",
+        description: `Tx Hash: ${txHash}`,
+      })
+    } catch (error) {
+      console.error("Error in Ultra Relay transaction:", error)
+      toast({
+        title: "Error",
+        description: "Failed to send transaction. See console for details.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-black p-6">
+    <div className="min-h-screen bg-black flex flex-col items-center justify-center">
       <div className="max-w-7xl mx-auto">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {sdks.map((sdk, index) => (
@@ -120,7 +248,12 @@ export default function Component() {
             </Card>
           ))}
         </div>
+        <div className="flex justify-center mt-8">
+          <Button onClick={runUltraRelaySponsoredTransaction} disabled={isLoading}>
+            {isLoading ? "Running..." : "Run Sponsored Transaction"}
+          </Button>
+        </div>
       </div>
     </div>
   )
-}
+} 
