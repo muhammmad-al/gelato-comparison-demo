@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { toast } from "@/components/ui/use-toast"
 import { createKernelAccount, createKernelAccountClient, getUserOperationGasPrice } from "@zerodev/sdk"
-import { createPublicClient, http, formatEther, formatUnits } from "viem"
+import { createPublicClient, http, formatEther, formatUnits, createWalletClient, type PrivateKeyAccount } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator"
 import { baseSepolia } from "viem/chains"
@@ -16,6 +16,9 @@ import { toSafeSmartAccount } from "permissionless/accounts"
 import { entryPoint07Address } from "viem/account-abstraction"
 import { createSmartAccountClient } from "permissionless"
 import { createPimlicoClient } from "permissionless/clients/pimlico"
+import { createGelatoSmartWalletClient, sponsored } from "@gelatonetwork/smartwallet"
+import { gelato } from "@gelatonetwork/smartwallet/accounts"
+import retry from "async-retry"
 
 const zeroAddress = "0x0000000000000000000000000000000000000000";
 
@@ -85,6 +88,8 @@ export default function Component() {
   const [alchemyClient, setAlchemyClient] = useState<any>(null)
   const [pimlicoAccount, setPimlicoAccount] = useState<any>(null)
   const [pimlicoClient, setPimlicoClient] = useState<any>(null)
+  const [gelatoAccount, setGelatoAccount] = useState<any>(null)
+  const [gelatoClient, setGelatoClient] = useState<any>(null)
 
   const metrics = [
     { label: "Latency (s)", key: "latency", badgeKey: "latencyBadge" },
@@ -375,13 +380,123 @@ export default function Component() {
     }
   }
 
-  // Run all three in parallel
+  // Gelato logic
+  const runGelatoSponsoredTransaction = async () => {
+    try {
+      let smartWalletClient = gelatoAccount
+      let client = gelatoClient
+      if (!smartWalletClient) {
+        const PRIVATE_KEY = generatePrivateKey()
+        const signer = privateKeyToAccount(PRIVATE_KEY)
+        const clientInstance = createPublicClient({
+          transport: http(),
+          chain: baseSepolia,
+        })
+        setGelatoClient(clientInstance as any)
+        const account = await gelato({
+          owner: signer,
+          client: clientInstance,
+        })
+        const walletClient = createWalletClient({
+          account,
+          chain: baseSepolia,
+          transport: http(""),
+        })
+        smartWalletClient = await createGelatoSmartWalletClient(
+          walletClient,
+          { apiKey: process.env.NEXT_PUBLIC_SPONSOR_API_KEY || "" }
+        )
+        setGelatoAccount(smartWalletClient)
+        client = clientInstance
+      }
+      const startTime = Date.now()
+      const calls = [
+        {
+          to: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+          value: BigInt(0),
+          data: "0x",
+        },
+      ]
+      const preparedCalls = await smartWalletClient.prepare({
+        payment: sponsored(process.env.NEXT_PUBLIC_SPONSOR_API_KEY || ""),
+        calls,
+      })
+      const results = await smartWalletClient.send({ preparedCalls })
+      const hash = await results?.wait()
+      const txReceipt = await retry(
+        async (bail: (error: Error) => void) => {
+          try {
+            const receipt = await client.getTransactionReceipt({
+              hash: hash as `0x${string}`,
+            })
+            if (!receipt) {
+              throw new Error("Transaction receipt not found")
+            }
+            return receipt
+          } catch (error: any) {
+            if (error.message?.includes("not be found")) {
+              throw error
+            }
+            bail(error)
+            return
+          }
+        },
+        {
+          retries: 5,
+          minTimeout: 1000,
+          maxTimeout: 5000,
+        }
+      )
+      if (!txReceipt) {
+        throw new Error("Failed to get transaction receipt after retries")
+      }
+      const l2GasUsed = txReceipt.gasUsed
+      const l1GasUsed = (txReceipt as any).l1GasUsed || BigInt(0)
+      const totalGasUsed = l2GasUsed + l1GasUsed
+      const gasPrice = txReceipt.effectiveGasPrice || BigInt(0)
+      const l1Fee = (txReceipt as any).l1Fee || BigInt(0)
+      const totalTxFee = l1Fee + l2GasUsed * gasPrice
+      const block = await client.getBlock({
+        blockNumber: txReceipt.blockNumber,
+      })
+      const latencyMs = Number(block.timestamp) * 1000 - startTime
+      const latencySec = latencyMs / 1000
+      setSdks(prev => prev.map(sdk =>
+        sdk.name === "Gelato SmartWallet SDK"
+          ? {
+              ...sdk,
+              latency: `${latencySec.toFixed(2)}`,
+              l1Gas: l1GasUsed.toString(),
+              l2Gas: l2GasUsed.toString(),
+              gasPrice: `${formatWeiToGwei(gasPrice)} Gwei`,
+              l1GasBadge: null,
+              l2GasBadge: null,
+              latencyBadge: null,
+            }
+          : sdk
+      ))
+      toast({
+        title: "Gelato Transaction Sent",
+        description: `Tx Hash: ${hash}`,
+      })
+    } catch (error) {
+      console.error("Error in Gelato transaction:", error)
+      toast({
+        title: "Error",
+        description: "Failed to send Gelato transaction. See console for details.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Run all four in parallel
   const runAllSponsoredTransactions = async () => {
     setIsLoading(true)
     await Promise.all([
       runUltraRelaySponsoredTransaction(),
       runAlchemySponsoredTransaction(),
       runPimlicoSponsoredTransaction(),
+      runGelatoSponsoredTransaction(),
     ])
     setIsLoading(false)
   }
