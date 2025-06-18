@@ -12,6 +12,10 @@ import { baseSepolia } from "viem/chains"
 import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants"
 import { createModularAccountAlchemyClient } from "@alchemy/aa-alchemy"
 import { LocalAccountSigner, type SmartAccountSigner, type SendUserOperationResult, baseSepolia as alchemyBaseSepolia } from "@alchemy/aa-core"
+import { toSafeSmartAccount } from "permissionless/accounts"
+import { entryPoint07Address } from "viem/account-abstraction"
+import { createSmartAccountClient } from "permissionless"
+import { createPimlicoClient } from "permissionless/clients/pimlico"
 
 const zeroAddress = "0x0000000000000000000000000000000000000000";
 
@@ -79,6 +83,8 @@ export default function Component() {
   const [ultraClient, setUltraClient] = useState<any>(null)
   const [alchemyAccount, setAlchemyAccount] = useState<any>(null)
   const [alchemyClient, setAlchemyClient] = useState<any>(null)
+  const [pimlicoAccount, setPimlicoAccount] = useState<any>(null)
+  const [pimlicoClient, setPimlicoClient] = useState<any>(null)
 
   const metrics = [
     { label: "Latency (s)", key: "latency", badgeKey: "latencyBadge" },
@@ -278,12 +284,104 @@ export default function Component() {
     }
   }
 
-  // Run both in parallel
-  const runBothSponsoredTransactions = async () => {
+  // Pimlico logic
+  const runPimlicoSponsoredTransaction = async () => {
+    try {
+      let smartAccountClient = pimlicoAccount
+      let client = pimlicoClient
+      if (!smartAccountClient) {
+        const PRIVATE_KEY = generatePrivateKey()
+        const signer = privateKeyToAccount(PRIVATE_KEY)
+        const clientInstance = createPublicClient({
+          transport: http(),
+          chain: baseSepolia,
+        })
+        setPimlicoClient(clientInstance as any)
+        const account = await toSafeSmartAccount({
+          client: clientInstance,
+          entryPoint: { address: entryPoint07Address, version: "0.7" },
+          owners: [signer],
+          saltNonce: BigInt(0),
+          version: "1.4.1",
+        })
+        const pimlicoClientInstance = createPimlicoClient({
+          transport: http(process.env.NEXT_PUBLIC_PIMLICO_URL || ""),
+          entryPoint: {
+            address: entryPoint07Address,
+            version: "0.7",
+          },
+        })
+        smartAccountClient = createSmartAccountClient({
+          account,
+          chain: baseSepolia,
+          bundlerTransport: http(process.env.NEXT_PUBLIC_PIMLICO_URL || ""),
+          paymaster: pimlicoClientInstance,
+          userOperation: {
+            estimateFeesPerGas: async () => {
+              return (await pimlicoClientInstance.getUserOperationGasPrice()).fast;
+            },
+          },
+        })
+        setPimlicoAccount(smartAccountClient)
+        client = clientInstance
+      }
+      const startTime = Date.now()
+      const txHash = await smartAccountClient.sendTransaction({
+        to: smartAccountClient.account.address,
+        value: BigInt(0),
+        data: "0x",
+      })
+      const txDetails = await client.getTransaction({
+        hash: txHash,
+      })
+      const txReceipt = await client.getTransactionReceipt({
+        hash: txHash,
+      })
+      const block = await client.getBlock({
+        blockNumber: txReceipt.blockNumber,
+      })
+      const latencyMs = Number(block.timestamp) * 1000 - startTime
+      const latencySec = latencyMs / 1000
+      const gasPrice = txDetails.gasPrice || BigInt(0)
+      const L2Gas = txReceipt.gasUsed
+      const l1GasUsed = (txReceipt as any).l1GasUsed || BigInt(0)
+      const l1Fee = (txReceipt as any).l1Fee || BigInt(0)
+      const totalTxFee = l1Fee + L2Gas * gasPrice
+      setSdks(prev => prev.map(sdk =>
+        sdk.name === "Pimlico"
+          ? {
+              ...sdk,
+              latency: `${latencySec.toFixed(2)}`,
+              l1Gas: l1GasUsed.toString(),
+              l2Gas: L2Gas.toString(),
+              gasPrice: `${formatWeiToGwei(gasPrice)} Gwei`,
+              l1GasBadge: null,
+              l2GasBadge: null,
+              latencyBadge: null,
+            }
+          : sdk
+      ))
+      toast({
+        title: "Pimlico Transaction Sent",
+        description: `Tx Hash: ${txHash}`,
+      })
+    } catch (error) {
+      console.error("Error in Pimlico transaction:", error)
+      toast({
+        title: "Error",
+        description: "Failed to send Pimlico transaction. See console for details.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Run all three in parallel
+  const runAllSponsoredTransactions = async () => {
     setIsLoading(true)
     await Promise.all([
       runUltraRelaySponsoredTransaction(),
       runAlchemySponsoredTransaction(),
+      runPimlicoSponsoredTransaction(),
     ])
     setIsLoading(false)
   }
@@ -340,7 +438,7 @@ export default function Component() {
           ))}
         </div>
         <div className="flex justify-center mt-8">
-          <Button onClick={runBothSponsoredTransactions} disabled={isLoading}>
+          <Button onClick={runAllSponsoredTransactions} disabled={isLoading}>
             {isLoading ? "Running..." : "Run Sponsored Transaction"}
           </Button>
         </div>
