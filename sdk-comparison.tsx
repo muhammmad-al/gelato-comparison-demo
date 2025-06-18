@@ -10,6 +10,10 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator"
 import { baseSepolia } from "viem/chains"
 import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants"
+import { createModularAccountAlchemyClient } from "@alchemy/aa-alchemy"
+import { LocalAccountSigner, type SmartAccountSigner, type SendUserOperationResult, baseSepolia as alchemyBaseSepolia } from "@alchemy/aa-core"
+
+const zeroAddress = "0x0000000000000000000000000000000000000000";
 
 export default function Component() {
   const [sdks, setSdks] = useState([
@@ -71,8 +75,10 @@ export default function Component() {
     },
   ])
   const [isLoading, setIsLoading] = useState(false)
-  const [account, setAccount] = useState<any>(null)
-  const [publicClient, setPublicClient] = useState<any>(null)
+  const [ultraAccount, setUltraAccount] = useState<any>(null)
+  const [ultraClient, setUltraClient] = useState<any>(null)
+  const [alchemyAccount, setAlchemyAccount] = useState<any>(null)
+  const [alchemyClient, setAlchemyClient] = useState<any>(null)
 
   const metrics = [
     { label: "Latency (s)", key: "latency", badgeKey: "latencyBadge" },
@@ -91,18 +97,17 @@ export default function Component() {
     return formatUnits(wei, 9)
   }
 
+  // ZeroDev UltraRelay logic
   const runUltraRelaySponsoredTransaction = async () => {
-    setIsLoading(true)
     try {
-      // 1. Create account if not already
-      let kernelAccount = account
-      let client = publicClient
+      let kernelAccount = ultraAccount
+      let client = ultraClient
       if (!kernelAccount) {
         const clientInstance = createPublicClient({
           transport: http(),
           chain: baseSepolia,
         })
-        setPublicClient(clientInstance as any)
+        setUltraClient(clientInstance as any)
         const PRIVATE_KEY = generatePrivateKey()
         const signer = privateKeyToAccount(PRIVATE_KEY)
         const entryPoint = getEntryPoint("0.7")
@@ -119,10 +124,9 @@ export default function Component() {
           entryPoint,
           kernelVersion,
         })
-        setAccount(kernelAccount)
+        setUltraAccount(kernelAccount)
         client = clientInstance
       }
-      // 2. Send sponsored transaction
       const startTime = Date.now()
       const kernelClient = createKernelAccountClient({
         account: kernelAccount,
@@ -166,7 +170,6 @@ export default function Component() {
       const l1GasUsed = (txReceipt as any).l1GasUsed || BigInt(0)
       const l1Fee = (txReceipt as any).l1Fee || BigInt(0)
       const totalTxFee = l1Fee + L2Gas * gasPrice
-      // 3. Update the UltraRelay card
       setSdks(prev => prev.map(sdk =>
         sdk.name === "ZeroDev UltraRelay"
           ? {
@@ -182,19 +185,107 @@ export default function Component() {
           : sdk
       ))
       toast({
-        title: "Transaction Sent",
+        title: "UltraRelay Transaction Sent",
         description: `Tx Hash: ${txHash}`,
       })
     } catch (error) {
       console.error("Error in Ultra Relay transaction:", error)
       toast({
         title: "Error",
-        description: "Failed to send transaction. See console for details.",
+        description: "Failed to send UltraRelay transaction. See console for details.",
         variant: "destructive",
       })
-    } finally {
-      setIsLoading(false)
     }
+  }
+
+  // Alchemy logic
+  const runAlchemySponsoredTransaction = async () => {
+    try {
+      let smartAccountClient = alchemyAccount
+      let client = alchemyClient
+      if (!smartAccountClient) {
+        const PRIV_KEY = generatePrivateKey()
+        const signer: SmartAccountSigner = LocalAccountSigner.privateKeyToAccountSigner(PRIV_KEY)
+        const RPC_URL = "https://sepolia.base.org"
+        const chain = alchemyBaseSepolia
+        smartAccountClient = await createModularAccountAlchemyClient({
+          apiKey: process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "",
+          chain,
+          signer,
+          gasManagerConfig: {
+            policyId: process.env.NEXT_PUBLIC_PAYMASTER_POLICY_ID || "",
+          },
+          transport: http(RPC_URL, { timeout: 30000 }),
+        })
+        setAlchemyAccount(smartAccountClient)
+        const clientInstance = createPublicClient({
+          transport: http(),
+          chain: baseSepolia,
+        })
+        setAlchemyClient(clientInstance as any)
+        client = clientInstance
+      }
+      const startTime = Date.now()
+      const result: SendUserOperationResult = await smartAccountClient.sendUserOperation({
+        uo: {
+          target: zeroAddress,
+          data: "0x",
+          value: 0n,
+        },
+      })
+      const txHash = await smartAccountClient.waitForUserOperationTransaction(result)
+      const txDetails = await client.getTransaction({
+        hash: txHash,
+      })
+      const txReceipt = await client.getTransactionReceipt({
+        hash: txHash,
+      })
+      const block = await client.getBlock({
+        blockNumber: txReceipt.blockNumber,
+      })
+      const latencyMs = Number(block.timestamp) * 1000 - startTime
+      const latencySec = latencyMs / 1000
+      const gasPrice = txDetails.gasPrice || BigInt(0)
+      const L2Gas = txReceipt.gasUsed
+      const l1GasUsed = (txReceipt as any).l1GasUsed || BigInt(0)
+      const l1Fee = (txReceipt as any).l1Fee || BigInt(0)
+      const totalTxFee = l1Fee + L2Gas * gasPrice
+      setSdks(prev => prev.map(sdk =>
+        sdk.name === "Alchemy"
+          ? {
+              ...sdk,
+              latency: `${latencySec.toFixed(2)}`,
+              l1Gas: l1GasUsed.toString(),
+              l2Gas: L2Gas.toString(),
+              gasPrice: `${formatWeiToGwei(gasPrice)} Gwei`,
+              l1GasBadge: null,
+              l2GasBadge: null,
+              latencyBadge: null,
+            }
+          : sdk
+      ))
+      toast({
+        title: "Alchemy Transaction Sent",
+        description: `Tx Hash: ${txHash}`,
+      })
+    } catch (error) {
+      console.error("Error in Alchemy transaction:", error)
+      toast({
+        title: "Error",
+        description: "Failed to send Alchemy transaction. See console for details.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Run both in parallel
+  const runBothSponsoredTransactions = async () => {
+    setIsLoading(true)
+    await Promise.all([
+      runUltraRelaySponsoredTransaction(),
+      runAlchemySponsoredTransaction(),
+    ])
+    setIsLoading(false)
   }
 
   return (
@@ -249,7 +340,7 @@ export default function Component() {
           ))}
         </div>
         <div className="flex justify-center mt-8">
-          <Button onClick={runUltraRelaySponsoredTransaction} disabled={isLoading}>
+          <Button onClick={runBothSponsoredTransactions} disabled={isLoading}>
             {isLoading ? "Running..." : "Run Sponsored Transaction"}
           </Button>
         </div>
