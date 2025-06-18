@@ -86,7 +86,7 @@ NEXT_PUBLIC_PIMLICO_URL=your_pimlico_api_url
 ### How to Get API Keys
 
 #### Gelato SmartWallet SDK
-1. Visit [Gelato Console](https://console.gelato.network/)
+1. Visit [Gelato App](https://app.gelato.network/relay)
 2. Create an account and get your Sponsor API key
 3. Add it to `NEXT_PUBLIC_SPONSOR_API_KEY`
 
@@ -97,7 +97,7 @@ NEXT_PUBLIC_PIMLICO_URL=your_pimlico_api_url
 4. Create a Gas Manager policy and add the policy ID to `NEXT_PUBLIC_PAYMASTER_POLICY_ID`
 
 #### ZeroDev UltraRelay
-1. Visit [ZeroDev Console](https://console.zerodev.app/)
+1. Visit [ZeroDev App](https://zerodev.app/)
 2. Get your UltraRelay URL
 3. Add it to `NEXT_PUBLIC_ULTRA_RELAY_URL`
 
