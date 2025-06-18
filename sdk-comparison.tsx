@@ -35,8 +35,8 @@ export default function Component() {
       l1GasBadge: null,
       l2Gas: "-",
       l2GasBadge: null,
-      chains: "-",
-      eip7702: "-",
+      paymaster: "Gelato Relay",
+      eip7702: "Yes",
     },
     {
       name: "Alchemy",
@@ -49,8 +49,8 @@ export default function Component() {
       l1GasBadge: null,
       l2Gas: "-",
       l2GasBadge: null,
-      chains: "-",
-      eip7702: "-",
+      paymaster: "Alchemy",
+      eip7702: "No",
     },
     {
       name: "ZeroDev UltraRelay",
@@ -63,8 +63,8 @@ export default function Component() {
       l1GasBadge: null,
       l2Gas: "-",
       l2GasBadge: null,
-      chains: "-",
-      eip7702: "-",
+      paymaster: "UltraRelay",
+      eip7702: "No",
     },
     {
       name: "Pimlico",
@@ -77,8 +77,8 @@ export default function Component() {
       l1GasBadge: null,
       l2Gas: "-",
       l2GasBadge: null,
-      chains: "-",
-      eip7702: "-",
+      paymaster: "Pimlico",
+      eip7702: "No",
     },
   ])
   const [isLoading, setIsLoading] = useState(false)
@@ -95,7 +95,7 @@ export default function Component() {
     { label: "Latency (s)", key: "latency", badgeKey: "latencyBadge" },
     { label: "L1 gas", key: "l1Gas", badgeKey: "l1GasBadge" },
     { label: "L2 gas", key: "l2Gas", badgeKey: "l2GasBadge" },
-    { label: "# Chains", key: "chains", badgeKey: null },
+    { label: "Paymaster", key: "paymaster", badgeKey: null },
     { label: "Purpose-built for EIP-7702", key: "eip7702", badgeKey: null },
   ]
 
@@ -139,6 +139,10 @@ export default function Component() {
         client = clientInstance
       }
       const startTime = Date.now()
+      
+      
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      
       const kernelClient = createKernelAccountClient({
         account: kernelAccount,
         chain: baseSepolia,
@@ -165,10 +169,34 @@ export default function Component() {
         hash: userOpHash,
       })
       const txHash = receipt.receipt.transactionHash
+      
+      // Add retry logic for transaction receipt
+      const txReceipt = await retry(
+        async (bail: (error: Error) => void) => {
+          try {
+            const receipt = await client.getTransactionReceipt({
+              hash: txHash,
+            })
+            if (!receipt) {
+              throw new Error("Transaction receipt not found")
+            }
+            return receipt
+          } catch (error: any) {
+            if (error.message?.includes("not be found")) {
+              throw error
+            }
+            bail(error)
+            return
+          }
+        },
+        {
+          retries: 5,
+          minTimeout: 1000,
+          maxTimeout: 5000,
+        }
+      )
+      
       const txDetails = await client.getTransaction({
-        hash: txHash,
-      })
-      const txReceipt = await client.getTransactionReceipt({
         hash: txHash,
       })
       const block = await client.getBlock({
@@ -226,7 +254,6 @@ export default function Component() {
           gasManagerConfig: {
             policyId: process.env.NEXT_PUBLIC_PAYMASTER_POLICY_ID || "",
           },
-          transport: http(RPC_URL, { timeout: 30000 }),
         })
         setAlchemyAccount(smartAccountClient)
         const clientInstance = createPublicClient({
@@ -237,18 +264,46 @@ export default function Component() {
         client = clientInstance
       }
       const startTime = Date.now()
+      
+      
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      
       const result: SendUserOperationResult = await smartAccountClient.sendUserOperation({
         uo: {
           target: zeroAddress,
           data: "0x",
-          value: 0n,
+          value: BigInt(0),
         },
       })
       const txHash = await smartAccountClient.waitForUserOperationTransaction(result)
+      
+      // Add retry logic for transaction receipt
+      const txReceipt = await retry(
+        async (bail: (error: Error) => void) => {
+          try {
+            const receipt = await client.getTransactionReceipt({
+              hash: txHash,
+            })
+            if (!receipt) {
+              throw new Error("Transaction receipt not found")
+            }
+            return receipt
+          } catch (error: any) {
+            if (error.message?.includes("not be found")) {
+              throw error
+            }
+            bail(error)
+            return
+          }
+        },
+        {
+          retries: 5,
+          minTimeout: 1000,
+          maxTimeout: 5000,
+        }
+      )
+      
       const txDetails = await client.getTransaction({
-        hash: txHash,
-      })
-      const txReceipt = await client.getTransactionReceipt({
         hash: txHash,
       })
       const block = await client.getBlock({
@@ -331,15 +386,43 @@ export default function Component() {
         client = clientInstance
       }
       const startTime = Date.now()
+      
+    
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      
       const txHash = await smartAccountClient.sendTransaction({
         to: smartAccountClient.account.address,
         value: BigInt(0),
         data: "0x",
       })
+      
+      // Add retry logic for transaction receipt
+      const txReceipt = await retry(
+        async (bail: (error: Error) => void) => {
+          try {
+            const receipt = await client.getTransactionReceipt({
+              hash: txHash,
+            })
+            if (!receipt) {
+              throw new Error("Transaction receipt not found")
+            }
+            return receipt
+          } catch (error: any) {
+            if (error.message?.includes("not be found")) {
+              throw error
+            }
+            bail(error)
+            return
+          }
+        },
+        {
+          retries: 5,
+          minTimeout: 1000,
+          maxTimeout: 5000,
+        }
+      )
+      
       const txDetails = await client.getTransaction({
-        hash: txHash,
-      })
-      const txReceipt = await client.getTransactionReceipt({
         hash: txHash,
       })
       const block = await client.getBlock({
@@ -459,7 +542,7 @@ export default function Component() {
       const block = await client.getBlock({
         blockNumber: txReceipt.blockNumber,
       })
-      const latencyMs = Number(block.timestamp) * 1000 - startTime
+      const latencyMs = Number(block.timestamp) * 1000 - startTime 
       const latencySec = latencyMs / 1000
       setSdks(prev => prev.map(sdk =>
         sdk.name === "Gelato SmartWallet SDK"
