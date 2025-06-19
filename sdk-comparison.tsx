@@ -138,10 +138,6 @@ export default function Component() {
         setUltraAccount(kernelAccount)
         client = clientInstance
       }
-      const startTime = Date.now()
-      
-      
-      await new Promise(resolve => setTimeout(resolve, 1500))
       
       const kernelClient = createKernelAccountClient({
         account: kernelAccount,
@@ -160,6 +156,9 @@ export default function Component() {
           data: "0x",
         },
       ])
+      
+      const startTime = Date.now()
+      
       const userOpHash = await kernelClient.sendUserOperation({
         callData,
         maxFeePerGas: BigInt(0),
@@ -263,10 +262,8 @@ export default function Component() {
         setAlchemyClient(clientInstance as any)
         client = clientInstance
       }
+      
       const startTime = Date.now()
-      
-      
-      await new Promise(resolve => setTimeout(resolve, 1500))
       
       const result: SendUserOperationResult = await smartAccountClient.sendUserOperation({
         uo: {
@@ -385,10 +382,8 @@ export default function Component() {
         setPimlicoAccount(smartAccountClient)
         client = clientInstance
       }
-      const startTime = Date.now()
       
-    
-      await new Promise(resolve => setTimeout(resolve, 1500))
+      const startTime = Date.now()
       
       const txHash = await smartAccountClient.sendTransaction({
         to: smartAccountClient.account.address,
@@ -492,7 +487,7 @@ export default function Component() {
         setGelatoAccount(smartWalletClient)
         client = clientInstance
       }
-      const startTime = Date.now()
+      
       const calls = [
         {
           to: "0x0000000000000000000000000000000000000000" as `0x${string}`,
@@ -504,6 +499,9 @@ export default function Component() {
         payment: sponsored(process.env.NEXT_PUBLIC_SPONSOR_API_KEY || ""),
         calls,
       })
+      
+      const startTime = Date.now()
+      
       const results = await smartWalletClient.send({ preparedCalls })
       const hash = await results?.wait()
       const txReceipt = await retry(
