@@ -18,9 +18,14 @@ import { createSmartAccountClient } from "permissionless"
 import { createPimlicoClient } from "permissionless/clients/pimlico"
 import { createGelatoSmartWalletClient, sponsored } from "@gelatonetwork/smartwallet"
 import { gelato } from "@gelatonetwork/smartwallet/accounts"
+import { createThirdwebClient, sendTransaction, prepareTransaction } from "thirdweb"
+import { smartWallet, privateKeyAccount } from "thirdweb/wallets"
+import { baseSepolia as thirdwebBaseSepolia } from "thirdweb/chains"
+import { parseEther } from "viem"
 import retry from "async-retry"
 
 const zeroAddress = "0x0000000000000000000000000000000000000000";
+const VITALIK_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 
 export default function Component() {
   const [sdks, setSdks] = useState([
@@ -80,6 +85,20 @@ export default function Component() {
       paymaster: "Pimlico",
       eip7702: "No",
     },
+    {
+      name: "Thirdweb",
+      icon: "/thirdweb_image.png",
+      iconBg: "bg-purple-500",
+      isLogo: true,
+      latency: "-",
+      latencyBadge: null,
+      l1Gas: "-",
+      l1GasBadge: null,
+      l2Gas: "-",
+      l2GasBadge: null,
+      paymaster: "Thirdweb",
+      eip7702: "No",
+    },
   ])
   const [isLoading, setIsLoading] = useState(false)
   const [ultraAccount, setUltraAccount] = useState<any>(null)
@@ -90,6 +109,9 @@ export default function Component() {
   const [pimlicoClient, setPimlicoClient] = useState<any>(null)
   const [gelatoAccount, setGelatoAccount] = useState<any>(null)
   const [gelatoClient, setGelatoClient] = useState<any>(null)
+  const [thirdwebAccount, setThirdwebAccount] = useState<any>(null)
+  const [thirdwebClient, setThirdwebClient] = useState<any>(null)
+  const [thirdwebResult, setThirdwebResult] = useState<string | null>(null);
 
   const metrics = [
     { label: "Latency (s)", key: "latency", badgeKey: "latencyBadge" },
@@ -226,6 +248,7 @@ export default function Component() {
         title: "UltraRelay Transaction Sent",
         description: `Tx Hash: ${txHash}`,
       })
+      console.log("ZeroDev UltraRelay transaction hash:", txHash)
     } catch (error) {
       console.error("Error in Ultra Relay transaction:", error)
       toast({
@@ -331,6 +354,7 @@ export default function Component() {
         title: "Alchemy Transaction Sent",
         description: `Tx Hash: ${txHash}`,
       })
+      console.log("Alchemy transaction hash:", txHash)
     } catch (error) {
       console.error("Error in Alchemy transaction:", error)
       toast({
@@ -448,6 +472,7 @@ export default function Component() {
         title: "Pimlico Transaction Sent",
         description: `Tx Hash: ${txHash}`,
       })
+      console.log("Pimlico transaction hash:", txHash)
     } catch (error) {
       console.error("Error in Pimlico transaction:", error)
       toast({
@@ -560,6 +585,7 @@ export default function Component() {
         title: "Gelato Transaction Sent",
         description: `Tx Hash: ${hash}`,
       })
+      console.log("Gelato transaction hash:", hash)
     } catch (error) {
       console.error("Error in Gelato transaction:", error)
       toast({
@@ -570,7 +596,59 @@ export default function Component() {
     }
   }
 
-  // Run all four in parallel
+  // Thirdweb logic
+  const runThirdwebSponsoredTransaction = async () => {
+    setIsLoading(true);
+    const startTime = Date.now(); // Record start time before sending transaction
+    try {
+      const res = await fetch("/api/thirdweb-tx", { method: "POST" });
+      const data = await res.json();
+      if (data.transactionHash) {
+        const transactionHash = data.transactionHash;
+        console.log("[Thirdweb] Transaction hash:", transactionHash);
+
+        // Fetch details using viem public client
+        const publicClient = createPublicClient({
+          chain: baseSepolia,
+          transport: http(),
+        });
+
+        // Wait for the transaction receipt (add retry logic if needed)
+        const txReceipt = await publicClient.getTransactionReceipt({ hash: transactionHash });
+        const txDetails = await publicClient.getTransaction({ hash: transactionHash });
+        const block = await publicClient.getBlock({ blockNumber: txReceipt.blockNumber });
+
+        const blockTimeMs = Number(block.timestamp) * 1000;
+        const latencyMs = blockTimeMs - startTime;
+        const latencySec = latencyMs / 1000;
+        const gasPrice = txDetails.gasPrice || BigInt(0);
+        const L2Gas = txReceipt.gasUsed;
+        const l1GasUsed = (txReceipt as any).l1GasUsed || BigInt(0);
+
+        setSdks(prev => prev.map(sdk =>
+          sdk.name === "Thirdweb"
+            ? {
+                ...sdk,
+                latency: `${latencySec.toFixed(2)}`,
+                l1Gas: l1GasUsed.toString(),
+                l2Gas: L2Gas.toString(),
+                gasPrice: `${formatWeiToGwei(gasPrice)} Gwei`,
+                l1GasBadge: null,
+                l2GasBadge: null,
+                latencyBadge: null,
+              }
+            : sdk
+        ));
+      } else {
+        console.error("[Thirdweb] Error:", data.error);
+      }
+    } catch (err) {
+      console.error("[Thirdweb] API call error:", err);
+    }
+    setIsLoading(false);
+  };
+
+  // Run all five in parallel
   const runAllSponsoredTransactions = async () => {
     setIsLoading(true)
     await Promise.all([
@@ -578,6 +656,7 @@ export default function Component() {
       runAlchemySponsoredTransaction(),
       runPimlicoSponsoredTransaction(),
       runGelatoSponsoredTransaction(),
+      runThirdwebSponsoredTransaction(),
     ])
     setIsLoading(false)
   }
@@ -585,7 +664,7 @@ export default function Component() {
   return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center">
       <div className="max-w-7xl mx-auto">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {sdks.map((sdk, index) => (
             <Card key={index} className="bg-gray-900 border-gray-700 rounded-2xl overflow-hidden">
               {/* Header */}
@@ -635,7 +714,7 @@ export default function Component() {
         </div>
         <div className="flex justify-center mt-8">
           <Button onClick={runAllSponsoredTransactions} disabled={isLoading}>
-            {isLoading ? "Running..." : "Run Sponsored Transaction"}
+            {isLoading ? "Running..." : "Run All Sponsored Transactions"}
           </Button>
         </div>
       </div>
