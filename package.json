@@ -11,7 +11,7 @@
   "dependencies": {
     "@alchemy/aa-alchemy": "^3.19.0",
     "@alchemy/aa-core": "^3.19.0",
-    "@gelatonetwork/smartwallet": "0.0.9",
+    "@gelatonetwork/smartwallet": "0.0.17",
     "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",

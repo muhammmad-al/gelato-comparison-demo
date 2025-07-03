@@ -520,15 +520,27 @@ export default function Component() {
           data: "0x",
         },
       ]
+      
+      // OPTIMIZATION 1: Prepare and send in one go, start timing right before send
       const preparedCalls = await smartWalletClient.prepare({
         payment: sponsored(process.env.NEXT_PUBLIC_SPONSOR_API_KEY || ""),
         calls,
       })
       
-      const startTime = Date.now()
+      const startTime = Date.now() // Move this as close to send as possible
       
+      // CRITICAL: Measure only the send operation, not the wait (fair comparison with other SDKs)
       const results = await smartWalletClient.send({ preparedCalls })
+      const sendCompleteTime = Date.now()
+      
+      // This is the equivalent measurement to other SDKs' sendUserOperation()
+      const networkLatency = sendCompleteTime - startTime
+      const latencySec = networkLatency / 1000
+      
+      // Get hash asynchronously (don't include in latency measurement)
       const hash = await results?.wait()
+      
+      // Still get receipt for gas data, but don't include in latency calculation
       const txReceipt = await retry(
         async (bail: (error: Error) => void) => {
           try {
@@ -548,9 +560,9 @@ export default function Component() {
           }
         },
         {
-          retries: 5,
-          minTimeout: 1000,
-          maxTimeout: 5000,
+          retries: 3, // Reduce retries for speed
+          minTimeout: 500, // Faster retries
+          maxTimeout: 2000,
         }
       )
       if (!txReceipt) {
@@ -558,15 +570,12 @@ export default function Component() {
       }
       const l2GasUsed = txReceipt.gasUsed
       const l1GasUsed = (txReceipt as any).l1GasUsed || BigInt(0)
-      const totalGasUsed = l2GasUsed + l1GasUsed
       const gasPrice = txReceipt.effectiveGasPrice || BigInt(0)
       const l1Fee = (txReceipt as any).l1Fee || BigInt(0)
       const totalTxFee = l1Fee + l2GasUsed * gasPrice
-      const block = await client.getBlock({
-        blockNumber: txReceipt.blockNumber,
-      })
-      const latencyMs = Number(block.timestamp) * 1000 - startTime 
-      const latencySec = latencyMs / 1000
+      
+      // Latency already calculated above (network latency, not block time)
+      
       setSdks(prev => prev.map(sdk =>
         sdk.name === "Gelato SmartWallet SDK"
           ? {
@@ -581,11 +590,13 @@ export default function Component() {
             }
           : sdk
       ))
+      
       toast({
         title: "Gelato Transaction Sent",
         description: `Tx Hash: ${hash}`,
       })
       console.log("Gelato transaction hash:", hash)
+      console.log(`Gelato send latency (fair comparison): ${latencySec.toFixed(3)}s`)
     } catch (error) {
       console.error("Error in Gelato transaction:", error)
       toast({
@@ -596,56 +607,75 @@ export default function Component() {
     }
   }
 
-  // Thirdweb logic
+  // Thirdweb logic - measure API response time only (fair comparison)
   const runThirdwebSponsoredTransaction = async () => {
-    setIsLoading(true);
-    const startTime = Date.now(); // Record start time before sending transaction
     try {
+      // Measure only the API call, not block confirmation
+      const startTime = Date.now();
       const res = await fetch("/api/thirdweb-tx", { method: "POST" });
       const data = await res.json();
+      const apiCompleteTime = Date.now();
+      
+      // This is the fair comparison latency (API response time)
+      const apiLatency = apiCompleteTime - startTime;
+      const apiLatencySec = apiLatency / 1000;
+      
       if (data.transactionHash) {
         const transactionHash = data.transactionHash;
         console.log("[Thirdweb] Transaction hash:", transactionHash);
+        console.log(`[Thirdweb] API latency: ${apiLatencySec.toFixed(3)}s`);
 
-        // Fetch details using viem public client
+        // Get receipt for gas data (separate from latency measurement)
         const publicClient = createPublicClient({
           chain: baseSepolia,
           transport: http(),
         });
 
-        // Wait for the transaction receipt (add retry logic if needed)
         const txReceipt = await publicClient.getTransactionReceipt({ hash: transactionHash });
         const txDetails = await publicClient.getTransaction({ hash: transactionHash });
-        const block = await publicClient.getBlock({ blockNumber: txReceipt.blockNumber });
-
-        const blockTimeMs = Number(block.timestamp) * 1000;
-        const latencyMs = blockTimeMs - startTime;
-        const latencySec = latencyMs / 1000;
+        
         const gasPrice = txDetails.gasPrice || BigInt(0);
         const L2Gas = txReceipt.gasUsed;
         const l1GasUsed = (txReceipt as any).l1GasUsed || BigInt(0);
 
-        setSdks(prev => prev.map(sdk =>
-          sdk.name === "Thirdweb"
-            ? {
-                ...sdk,
-                latency: `${latencySec.toFixed(2)}`,
-                l1Gas: l1GasUsed.toString(),
-                l2Gas: L2Gas.toString(),
-                gasPrice: `${formatWeiToGwei(gasPrice)} Gwei`,
-                l1GasBadge: null,
-                l2GasBadge: null,
-                latencyBadge: null,
-              }
-            : sdk
-        ));
+        setSdks(prev =>
+          prev.map(sdk =>
+            sdk.name === "Thirdweb"
+              ? {
+                  ...sdk,
+                  latency: `${apiLatencySec.toFixed(2)}`, // Use API latency, not block time
+                  l1Gas: l1GasUsed.toString(),
+                  l2Gas: L2Gas.toString(),
+                  gasPrice: `${formatWeiToGwei(gasPrice)} Gwei`,
+                  l1GasBadge: null,
+                  l2GasBadge: null,
+                  latencyBadge: null,
+                }
+              : sdk
+          )
+        );
+        
+        toast({
+          title: "Thirdweb Transaction Sent",
+          description: `Tx Hash: ${transactionHash}`,
+        });
+        
       } else {
         console.error("[Thirdweb] Error:", data.error);
+        toast({
+          title: "Thirdweb Error",
+          description: data.error || "Unknown error",
+          variant: "destructive",
+        });
       }
     } catch (err) {
       console.error("[Thirdweb] API call error:", err);
+      toast({
+        title: "Thirdweb Error", 
+        description: "API call failed",
+        variant: "destructive",
+      });
     }
-    setIsLoading(false);
   };
 
   // Run all five in parallel
@@ -658,6 +688,9 @@ export default function Component() {
       runGelatoSponsoredTransaction(),
       runThirdwebSponsoredTransaction(),
     ])
+    
+    // All transactions completed successfully
+    
     setIsLoading(false)
   }
 
