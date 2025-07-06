@@ -30,7 +30,7 @@ const VITALIK_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 export default function Component() {
   const [sdks, setSdks] = useState([
     {
-      name: "Gelato SmartWallet SDK",
+      name: "Gelato",
       icon: "/gelato-logo.svg",
       iconBg: "bg-red-500",
       isLogo: true,
@@ -40,8 +40,9 @@ export default function Component() {
       l1GasBadge: null,
       l2Gas: "-",
       l2GasBadge: null,
-      paymaster: "Gelato Relay",
-      eip7702: "Yes",
+      paymaster: "Gelato",
+      smartWallet: "Gelato",
+      eip7702: " Yes",
     },
     {
       name: "Alchemy",
@@ -55,6 +56,7 @@ export default function Component() {
       l2Gas: "-",
       l2GasBadge: null,
       paymaster: "Alchemy",
+      smartWallet: "Alchemy",
       eip7702: "No",
     },
     {
@@ -69,6 +71,7 @@ export default function Component() {
       l2Gas: "-",
       l2GasBadge: null,
       paymaster: "UltraRelay",
+      smartWallet: "ZeroDev",
       eip7702: "No",
     },
     {
@@ -83,6 +86,7 @@ export default function Component() {
       l2Gas: "-",
       l2GasBadge: null,
       paymaster: "Pimlico",
+      smartWallet: "Pimlico",
       eip7702: "No",
     },
     {
@@ -97,6 +101,7 @@ export default function Component() {
       l2Gas: "-",
       l2GasBadge: null,
       paymaster: "Thirdweb",
+      smartWallet: "Thirdweb",
       eip7702: "No",
     },
   ])
@@ -118,7 +123,8 @@ export default function Component() {
     { label: "L1 gas", key: "l1Gas", badgeKey: "l1GasBadge" },
     { label: "L2 gas", key: "l2Gas", badgeKey: "l2GasBadge" },
     { label: "Paymaster", key: "paymaster", badgeKey: null },
-    { label: "Purpose-built for EIP-7702", key: "eip7702", badgeKey: null },
+    { label: "Smart Wallet", key: "smartWallet", badgeKey: null },
+    { label: "Purpose-built for EIP-7702 ", key: "eip7702", badgeKey: null },
   ]
 
   // Helper function to format wei to ETH
@@ -577,7 +583,7 @@ export default function Component() {
       // Latency already calculated above (network latency, not block time)
       
       setSdks(prev => prev.map(sdk =>
-        sdk.name === "Gelato SmartWallet SDK"
+        sdk.name === "Gelato"
           ? {
               ...sdk,
               latency: `${latencySec.toFixed(2)}`,
