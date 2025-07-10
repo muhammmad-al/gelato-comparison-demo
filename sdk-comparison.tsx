@@ -294,11 +294,21 @@ export default function Component() {
       
       const startTime = Date.now()
       
+      // FIXED: Add proper gas estimation with buffer
       const result: SendUserOperationResult = await smartAccountClient.sendUserOperation({
         uo: {
           target: zeroAddress,
           data: "0x",
           value: BigInt(0),
+        },
+        // Add this to force fresh gas estimation with buffer
+        overrides: {
+          maxFeePerGas: {
+            multiplier: 1.5, // 50% buffer above current gas price
+          },
+          maxPriorityFeePerGas: {
+            multiplier: 1.5,
+          },
         },
       })
       const txHash = await smartAccountClient.waitForUserOperationTransaction(result)
@@ -492,31 +502,44 @@ export default function Component() {
   // Gelato logic
   const runGelatoSponsoredTransaction = async () => {
     try {
+      console.log("[Gelato] Starting sponsored transaction...")
       let smartWalletClient = gelatoAccount
       let client = gelatoClient
       if (!smartWalletClient) {
+        console.log("[Gelato] Creating new smart wallet client...")
         const PRIVATE_KEY = generatePrivateKey()
         const signer = privateKeyToAccount(PRIVATE_KEY)
+        console.log("[Gelato] Generated signer address:", signer.address)
+        
         const clientInstance = createPublicClient({
           transport: http(),
           chain: baseSepolia,
         })
         setGelatoClient(clientInstance as any)
+        console.log("[Gelato] Created public client for Base Sepolia")
+        
         const account = await gelato({
           owner: signer,
           client: clientInstance,
         })
+        console.log("[Gelato] Created Gelato account:", account.address)
+        
         const walletClient = createWalletClient({
           account,
           chain: baseSepolia,
           transport: http(""),
         })
+        console.log("[Gelato] Created wallet client")
+        
         smartWalletClient = await createGelatoSmartWalletClient(
           walletClient,
           { apiKey: process.env.NEXT_PUBLIC_SPONSOR_API_KEY || "" }
         )
+        console.log("[Gelato] Created smart wallet client with sponsor API key")
         setGelatoAccount(smartWalletClient)
         client = clientInstance
+      } else {
+        console.log("[Gelato] Using existing smart wallet client")
       }
       
       const calls = [
@@ -526,27 +549,37 @@ export default function Component() {
           data: "0x",
         },
       ]
+      console.log("[Gelato] Prepared calls:", calls)
       
       // OPTIMIZATION 1: Prepare and send in one go, start timing right before send
+      console.log("[Gelato] Preparing transaction with sponsored payment...")
       const preparedCalls = await smartWalletClient.prepare({
         payment: sponsored(process.env.NEXT_PUBLIC_SPONSOR_API_KEY || ""),
         calls,
       })
+      console.log("[Gelato] Transaction prepared successfully")
       
       const startTime = Date.now() // Move this as close to send as possible
+      console.log("[Gelato] Starting transaction send at:", new Date(startTime).toISOString())
       
       // CRITICAL: Measure only the send operation, not the wait (fair comparison with other SDKs)
+      console.log("[Gelato] Sending transaction...")
       const results = await smartWalletClient.send({ preparedCalls })
       const sendCompleteTime = Date.now()
+      console.log("[Gelato] Transaction sent successfully at:", new Date(sendCompleteTime).toISOString())
       
       // This is the equivalent measurement to other SDKs' sendUserOperation()
       const networkLatency = sendCompleteTime - startTime
       const latencySec = networkLatency / 1000
+      console.log(`[Gelato] Network send latency: ${latencySec.toFixed(3)}s (${networkLatency}ms)`)
       
       // Get hash asynchronously (don't include in latency measurement)
+      console.log("[Gelato] Waiting for transaction hash...")
       const hash = await results?.wait()
+      console.log("[Gelato] Transaction hash received:", hash)
       
       // Still get receipt for gas data, but don't include in latency calculation
+      console.log("[Gelato] Fetching transaction receipt...")
       const txReceipt = await retry(
         async (bail: (error: Error) => void) => {
           try {
@@ -574,11 +607,27 @@ export default function Component() {
       if (!txReceipt) {
         throw new Error("Failed to get transaction receipt after retries")
       }
+      console.log("[Gelato] Transaction receipt received:", {
+        blockNumber: txReceipt.blockNumber,
+        gasUsed: txReceipt.gasUsed.toString(),
+        effectiveGasPrice: txReceipt.effectiveGasPrice?.toString(),
+        status: txReceipt.status
+      })
+      
       const l2GasUsed = txReceipt.gasUsed
       const l1GasUsed = (txReceipt as any).l1GasUsed || BigInt(0)
       const gasPrice = txReceipt.effectiveGasPrice || BigInt(0)
       const l1Fee = (txReceipt as any).l1Fee || BigInt(0)
       const totalTxFee = l1Fee + l2GasUsed * gasPrice
+      
+      console.log("[Gelato] Gas analysis:", {
+        l2GasUsed: l2GasUsed.toString(),
+        l1GasUsed: l1GasUsed.toString(),
+        gasPrice: gasPrice.toString(),
+        gasPriceGwei: formatWeiToGwei(gasPrice),
+        l1Fee: l1Fee.toString(),
+        totalTxFee: totalTxFee.toString()
+      })
       
       // Latency already calculated above (network latency, not block time)
       
@@ -601,10 +650,21 @@ export default function Component() {
         title: "Gelato Transaction Sent",
         description: `Tx Hash: ${hash}`,
       })
-      console.log("Gelato transaction hash:", hash)
-      console.log(`Gelato send latency (fair comparison): ${latencySec.toFixed(3)}s`)
+      console.log("[Gelato] Transaction completed successfully!")
+      console.log("[Gelato] Final metrics:", {
+        transactionHash: hash,
+        latency: `${latencySec.toFixed(3)}s`,
+        l1Gas: l1GasUsed.toString(),
+        l2Gas: l2GasUsed.toString(),
+        gasPrice: `${formatWeiToGwei(gasPrice)} Gwei`
+      })
     } catch (error) {
-      console.error("Error in Gelato transaction:", error)
+      console.error("[Gelato] Error in Gelato transaction:", error)
+      console.error("[Gelato] Error details:", {
+        message: error.message,
+        cause: error.cause,
+        stack: error.stack
+      })
       toast({
         title: "Error",
         description: "Failed to send Gelato transaction. See console for details.",
